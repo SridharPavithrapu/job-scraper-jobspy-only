@@ -2,15 +2,17 @@ name: Daily Job Scrape & Email (5 PM PT)
 
 on:
   schedule:
-    # 5 PM Pacific == 00:00 UTC (PDT) or 01:00 UTC (PST). Run both.
+    # 5 PM Pacific == 00:00 UTC (PDT) or 01:00 UTC (PST)
     - cron: "0 0 * * *"
     - cron: "0 1 * * *"
-  workflow_dispatch: {}   # allow manual runs for debugging
+  workflow_dispatch: {}   # allow manual run for debugging
 
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout
@@ -20,7 +22,6 @@ jobs:
         run: |
           echo "Working dir: $(pwd)"
           ls -la
-          echo
           test -f requirements.txt && echo "✅ requirements.txt present" || echo "::warning::requirements.txt missing"
           test -f automation_runner.py && echo "✅ automation_runner.py present" || echo "::error::automation_runner.py missing"
 
@@ -49,12 +50,30 @@ jobs:
           fi
           python - <<'PY'
 import sys
-print("pip site-packages:", sys.path)
+print("pip site-packages:", sys.path[:3])
 import jobspy
 print("✅ jobspy import OK (python-jobspy)")
 PY
 
-      - name: Check required secrets
+      # Determine if this is the real send window (5 PM PT) or not
+      - name: Guard — only send at 17:00 America/Los_Angeles
+        id: guard
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+from datetime import datetime
+from zoneinfo import ZoneInfo
+now = datetime.now(ZoneInfo("America/Los_Angeles"))
+print(f"local_pt={now.isoformat()}")
+print(f"run_ok={'true' if now.hour == 17 else 'false'}")
+PY
+      - name: Log PT time
+        run: |
+          echo "Local PT time: ${{ steps.guard.outputs.local_pt }}"
+          echo "Send window:   ${{ steps.guard.outputs.run_ok }}"
+
+      # Only needed for REAL runs (scheduled at 5 PM PT)
+      - name: Check required secrets (real send only)
+        if: steps.guard.outputs.run_ok == 'true'
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
@@ -73,66 +92,40 @@ PY
           done
           [ "$missing" -eq 0 ] || exit 1
 
-      - name: Guard — only send at 17:00 America/Los_Angeles (scheduled runs)
-        id: guard
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-from datetime import datetime
-from zoneinfo import ZoneInfo
-now = datetime.now(ZoneInfo("America/Los_Angeles"))
-print(f"local_pt={now.isoformat()}")
-print(f"run_ok={'true' if now.hour == 17 else 'false'}")
-PY
-      - name: Log PT time
-        run: |
-          echo "Local PT time from guard: ${{ steps.guard.outputs.local_pt }}"
-          echo "run_ok: ${{ steps.guard.outputs.run_ok }}"
-
-      # DRY-RUNS (manual runs only). Useful to verify scraping, counts, and CSVs without sending emails.
-      - name: Dry-run yoshitha (debug only)
+      # DRY-RUNS for manual debugging (never send email).
+      # Do not fail the workflow if a scrape has a transient issue.
+      - name: Dry-run yoshitha (manual only)
         if: ${{ github.event_name == 'workflow_dispatch' }}
+        continue-on-error: true
         env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:   ${{ secrets.SMTP_USER }}
-          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
-          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
           JOBSPY_PROXIES: ${{ secrets.JOBSPY_PROXIES }}
           JOBSPY_USER_AGENT: ${{ secrets.JOBSPY_USER_AGENT }}
         run: |
           echo "▶️ Dry-run: yoshitha"
-          python automation_runner.py --profile yoshitha --dry-run --debug
+          python automation_runner.py --profile yoshitha --dry-run --debug || echo "::warning::dry-run yoshitha encountered errors"
 
-      - name: Dry-run shazia (debug only)
+      - name: Dry-run shazia (manual only)
         if: ${{ github.event_name == 'workflow_dispatch' }}
+        continue-on-error: true
         env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:   ${{ secrets.SMTP_USER }}
-          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
-          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
           JOBSPY_PROXIES: ${{ secrets.JOBSPY_PROXIES }}
           JOBSPY_USER_AGENT: ${{ secrets.JOBSPY_USER_AGENT }}
         run: |
           echo "▶️ Dry-run: shazia"
-          python automation_runner.py --profile shazia --dry-run --debug
+          python automation_runner.py --profile shazia --dry-run --debug || echo "::warning::dry-run shazia encountered errors"
 
-      - name: Dry-run ruthvej (debug only)
+      - name: Dry-run ruthvej (manual only)
         if: ${{ github.event_name == 'workflow_dispatch' }}
+        continue-on-error: true
         env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:   ${{ secrets.SMTP_USER }}
-          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
-          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
           JOBSPY_PROXIES: ${{ secrets.JOBSPY_PROXIES }}
           JOBSPY_USER_AGENT: ${{ secrets.JOBSPY_USER_AGENT }}
         run: |
           echo "▶️ Dry-run: ruthvej"
-          python automation_runner.py --profile ruthvej --dry-run --debug
+          python automation_runner.py --profile ruthvej --dry-run --debug || echo "::warning::dry-run ruthvej encountered errors"
 
-      # REAL SEND — only when scheduled AND it’s 5 PM PT per guard
-      - name: Run automation (send emails)
+      # REAL SENDS — only at 5 PM PT per guard
+      - name: Run automation (send emails at 5 PM PT)
         if: steps.guard.outputs.run_ok == 'true'
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
@@ -144,23 +137,22 @@ PY
           JOBSPY_USER_AGENT: ${{ secrets.JOBSPY_USER_AGENT }}
         run: |
           set -e
-          echo "▶️ Sending for yoshitha"
+          echo "▶️ Sending yoshitha"
           python automation_runner.py --profile yoshitha
-          echo "▶️ Sending for shazia"
+          echo "▶️ Sending shazia"
           python automation_runner.py --profile shazia
-          echo "▶️ Sending for ruthvej"
+          echo "▶️ Sending ruthvej"
           python automation_runner.py --profile ruthvej
           echo "✅ All profiles executed"
 
       - name: Summarize CSV outputs
         if: always()
         run: |
-          echo "── Automation outputs ──"
+          echo "── automation_out CSVs ──"
           if compgen -G "automation_out/*.csv" > /dev/null; then
             for f in automation_out/*.csv; do
               echo "::group::$f"
-              echo "Rows (including header): $(wc -l < "$f")"
-              echo "First 5 lines:"
+              echo "Rows: $(wc -l < "$f")"
               head -n 5 "$f" || true
               echo "::endgroup::"
             done
@@ -168,9 +160,9 @@ PY
             echo "::warning::No CSVs in automation_out/"
           fi
 
-          echo "── Debug runs ──"
+          echo "── debug_runs CSVs ──"
           if compgen -G "debug_runs/**/*.csv" > /dev/null; then
-            find debug_runs -type f -name "*.csv" -maxdepth 3 -print0 | xargs -0 -I{} sh -c 'echo "::group::{}"; echo "Rows (including header): $(wc -l < "{}")"; head -n 3 "{}" || true; echo "::endgroup::"'
+            find debug_runs -type f -name "*.csv" -maxdepth 3 -print0 | xargs -0 -I{} sh -c 'echo "::group::{}"; echo "Rows: $(wc -l < "{}")"; head -n 3 "{}" || true; echo "::endgroup::"'
           else
             echo "No debug CSVs found."
           fi
