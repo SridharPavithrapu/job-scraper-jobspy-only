@@ -49,23 +49,23 @@ jobs:
             pip install "python-jobspy==1.1.82" streamlit pandas "pydantic<3" requests beautifulsoup4 markdownify tls-client PyYAML python-dotenv tzdata numpy==1.26.3
           fi
           python - <<'PY'
-import sys
-print("pip site-packages:", sys.path[:3])
-import jobspy
-print("✅ jobspy import OK (python-jobspy)")
-PY
+          import sys
+          print("pip site-packages:", sys.path[:3])
+          import jobspy
+          print("✅ jobspy import OK (python-jobspy)")
+          PY
 
       # Determine if this is the real send window (5 PM PT) or not
       - name: Guard — only send at 17:00 America/Los_Angeles
         id: guard
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
-from datetime import datetime
-from zoneinfo import ZoneInfo
-now = datetime.now(ZoneInfo("America/Los_Angeles"))
-print(f"local_pt={now.isoformat()}")
-print(f"run_ok={'true' if now.hour == 17 else 'false'}")
-PY
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          now = datetime.now(ZoneInfo("America/Los_Angeles"))
+          print(f"local_pt={now.isoformat()}")
+          print(f"run_ok={'true' if now.hour == 17 else 'false'}")
+          PY
       - name: Log PT time
         run: |
           echo "Local PT time: ${{ steps.guard.outputs.local_pt }}"
