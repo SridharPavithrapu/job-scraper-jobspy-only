@@ -1,1 +1,113 @@
-# (paste the Daily Job Scrape & Email (5 PM PT) workflow I gave you earlier)
+name: Daily Job Scrape & Email (5 PM PT)
+
+on:
+  schedule:
+    # 5 PM Pacific == 00:00 UTC (PDT) or 01:00 UTC (PST)
+    - cron: "0 0 * * *"
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}   # allow manual run for debugging
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show repo tree (debug)
+        run: |
+          pwd
+          ls -la
+          echo
+          [ -f requirements.txt ] && echo "requirements.txt exists" || echo "NO requirements.txt"
+          [ -f automation_runner.py ] && echo "automation_runner.py exists" || echo "NO automation_runner.py"
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -V
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            # Fallback minimal set if you forgot to commit requirements.txt
+            pip install "python-jobspy==1.1.82" streamlit pandas "pydantic<3" requests beautifulsoup4 markdownify tls-client PyYAML python-dotenv tzdata
+          fi
+          python - <<'PY'
+import sys
+print("pip ok, site-packages:", sys.path)
+import jobspy; print("jobspy import OK (python-jobspy)")
+PY
+
+      # Make sure secrets exist BEFORE running
+      - name: Check required secrets
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
+        run: |
+          set -e
+          for v in SMTP_SERVER SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is not set (Add it in Settings > Secrets and variables > Actions)"; exit 1
+            fi
+          done
+          echo "All required secrets exist."
+
+      # Guard so this only auto-sends at 17:00 PT; manual runs skip the guard by using 'workflow_dispatch'
+      - name: Guard — only run at 17:00 America/Los_Angeles (for scheduled runs)
+        id: guard
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+from datetime import datetime
+from zoneinfo import ZoneInfo
+now = datetime.now(ZoneInfo("America/Los_Angeles"))
+print(f"local_pt={now.isoformat()}")
+print(f"run_ok={'true' if now.hour == 17 else 'false'}")
+PY
+
+      # QUICK SMOKE TEST — DRY RUN ONE PROFILE (does not send email)
+      - name: Dry-run yoshitha (debug only)
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
+          JOBSPY_PROXIES: ${{ secrets.JOBSPY_PROXIES }}
+        run: |
+          python automation_runner.py --profile yoshitha --dry-run --debug || exit 1
+          echo "Dry-run complete (no email sent)."
+
+      # REAL RUN — only on schedule at 5 PM PT
+      - name: Run automation (all profiles, sends email)
+        if: steps.guard.outputs.run_ok == 'true'
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
+          JOBSPY_PROXIES: ${{ secrets.JOBSPY_PROXIES }}
+        run: |
+          set -e
+          python automation_runner.py --profile yoshitha
+          python automation_runner.py --profile shazia
+          python automation_runner.py --profile ruthvej
+
+      - name: Upload CSV artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-results-${{ github.run_id }}
+          path: |
+            automation_out/*.csv
+            debug_runs/**/*.csv
+          if-no-files-found: ignore
