@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+automation_out/
+debug_runs/
+*.csv
+.DS_Store

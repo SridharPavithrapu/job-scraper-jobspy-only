@@ -1,0 +1,15 @@
+# === Core app ===
+streamlit>=1.36.0
+pandas>=2.1.0,<3.0.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+tzdata>=2024.1
+
+# === Job scraping (JobSpy) ===
+# IMPORTANT: Use python-jobspy (the scraper) — NOT "jobspy" (a Redis job queue).
+python-jobspy==1.1.82
+beautifulsoup4>=4.12.2
+markdownify>=0.13.1
+requests>=2.31.0
+tls-client>=1.0.1
+pydantic>=2.3.0,<3.0.0
