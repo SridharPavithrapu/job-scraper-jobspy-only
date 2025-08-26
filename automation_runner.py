@@ -242,16 +242,15 @@ def run_profile(profile_key: str, send_email: bool=False, out_dir: str="automati
         employment_type="any",
         results_wanted=COMMON["results_wanted"],
         country_indeed="USA",
-        is_remote=None,
         linkedin_fetch_description=False,
+        linkedin_easy_apply=False,
         jobspy_proxies=(proxies or COMMON["jobspy_proxies"]),
         jobspy_user_agent=(user_agent or COMMON["jobspy_user_agent"]),
         jobspy_verbose=COMMON["jobspy_verbose"],
-        linkedin_easy_apply=False,
         sequential_mode=COMMON["sequential_mode"],
         per_site_delay=COMMON["per_site_delay"],
-        debug_enabled=bool(debug_enabled),
-        quiet_logs=True,
+        # this is the supported debug hook in your service:
+        debug_run_name=f"{profile_key}_{stamp}"
     )
 
     # Optional experience filter if available; keep unknown years
