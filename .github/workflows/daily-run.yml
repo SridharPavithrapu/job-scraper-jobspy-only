@@ -2,10 +2,10 @@ name: Daily Job Scrape & Email (5 PM PT)
 
 on:
   schedule:
-    # 5 PM PT runs all year. 00:00 UTC (PDT) + 01:00 UTC (PST)
+    # These two entries fire daily at 00:00 UTC and 01:00 UTC.
+    # Keeping both means you get one run in PDT season and one in PST season.
     - cron: "0 0 * * *"
-    - cron: "0 1 * * *"
-  workflow_dispatch:
+  workflow_dispatch: {}  # manual run for debugging
 
 jobs:
   run:
@@ -39,27 +39,19 @@ jobs:
             pip install "python-jobspy==1.1.82" pandas "pydantic<3" requests beautifulsoup4 markdownify tls-client tzdata python-dotenv
           fi
           python - <<'PY'
-          import sys; import importlib
+          import sys, importlib
           print("site-packages sample:", sys.path[:3])
-          importlib.import_module("jobspy"); print("✅ python-jobspy import OK")
+          importlib.import_module("jobspy")
+          print("✅ python-jobspy import OK")
           PY
 
-      # Guard to avoid duplicate sends when both cron entries fire
-      - name: Guard — only send at 17:00 America/Los_Angeles
-        id: guard
+      - name: Log current PT time (for visibility only)
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
+          python - <<'PY'
           from datetime import datetime
           from zoneinfo import ZoneInfo
-          now = datetime.now(ZoneInfo("America/Los_Angeles"))
-          print(f"local_pt={now.isoformat()}")
-          print(f"run_ok={'true' if now.hour == 17 else 'false'}")
+          print("Local PT time:", datetime.now(ZoneInfo("America/Los_Angeles")).isoformat())
           PY
-
-      - name: Log PT time
-        run: |
-          echo "Local PT time: ${{ steps.guard.outputs.local_pt }}"
-          echo "Send window:   ${{ steps.guard.outputs.run_ok }}"
 
       # Manual dry-runs for debugging – does NOT send emails
       - name: Dry-run all profiles (manual only)
@@ -73,9 +65,9 @@ jobs:
           python automation_runner.py --profile shazia   --dry-run --debug --hours 24
           python automation_runner.py --profile ruthvej  --dry-run --debug --hours 24
 
-      # Real sends at 5 PM PT
-      - name: Check required email secrets (real sends only)
-        if: steps.guard.outputs.run_ok == 'true'
+      # Real sends for scheduled runs (no guard)
+      - name: Check required email secrets (scheduled runs)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
@@ -89,8 +81,8 @@ jobs:
           done
           echo "✅ all email secrets present"
 
-      - name: Run automation (emails)
-        if: steps.guard.outputs.run_ok == 'true'
+      - name: Run automation (emails on schedule)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
@@ -117,7 +109,8 @@ jobs:
             echo "::endgroup::"
           done
           echo "── debug_runs CSVs ──"
-          find debug_runs -type f -name "*.csv" -print0 2>/dev/null | xargs -0 -I{} sh -c 'echo "::group::{}"; wc -l "{}"; head -n 3 "{}"; echo "::endgroup::"' || true
+          find debug_runs -type f -name "*.csv" -print0 2>/dev/null \
+            | xargs -0 -I{} sh -c 'echo "::group::{}"; wc -l "{}"; head -n 3 "{}"; echo "::endgroup::"' || true
 
       - name: Upload artifacts
         if: always()
