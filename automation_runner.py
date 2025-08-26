@@ -215,6 +215,13 @@ def _expand_for_glassdoor(locs):
 def run_profile(profile_key: str, send_email: bool=False, out_dir: str="automation_out", hours_old: int | None = None,
                 proxies: list[str] | None = None, user_agent: str | None = None, debug_enabled: bool = False) -> str:
     prof = PROFILES[profile_key]
+    
+    # ✅ Allow GitHub Actions matrix to force a single board via env JOB_BOARDS
+    #    e.g., JOB_BOARDS=indeed  (from the workflow’s matrix)
+    env_boards = os.getenv("JOB_BOARDS")
+    if env_boards:
+        prof["boards"] = [b.strip() for b in env_boards.split(",") if b.strip()]
+    
     titles = prof["titles"]
     # Expand "All US states", then append Glassdoor-friendly metros for state inputs
     locations = _expand_for_glassdoor(_flatten_locations(prof["locations"]))
@@ -309,8 +316,15 @@ def main():
     args = ap.parse_args()
 
     hours_cli = args.hours if hasattr(args, "hours") else None
-    proxies = [p.strip() for p in args.proxies.split(",")] if args.proxies else None
-    ua = args.ua
+    # Prefer CLI flags; otherwise fall back to env (used by GitHub Actions secrets)
+    if args.proxies:
+        proxies = [p.strip() for p in args.proxies.split(",") if p.strip()]
+    elif os.getenv("JOBSPY_PROXIES"):
+        proxies = [p.strip() for p in os.getenv("JOBSPY_PROXIES","").split(",") if p.strip()]
+    else:
+        proxies = None
+    
+    ua = args.ua or os.getenv("JOBSPY_USER_AGENT")
 
     if not args.profile and not args.all:
         print("Choose --profile {shazia|yoshitha|ruthvej} or --all", file=sys.stderr)
