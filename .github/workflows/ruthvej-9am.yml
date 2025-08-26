@@ -1,29 +1,31 @@
-name: Ruthvej Job Scrape & Email (9 AM PT)
+name: Ruthvej — Daily Job Scrape & Email (9 AM PT)
 
 on:
   schedule:
-    # 9 AM Pacific, year-round (PDT=16:00 UTC, PST=17:00 UTC)
-    - cron: "0 16 * * *"
-    - cron: "0 17 * * *"
-  workflow_dispatch: {}
+    - cron: "0 16 * * *"  # 9 AM PT while on PDT (UTC-7). Update at DST switch.
+  workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     env:
       PYTHONUNBUFFERED: "1"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [indeed, glassdoor, google]
+      max-parallel: 3
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python 3.10
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -37,23 +39,8 @@ jobs:
           else
             pip install "python-jobspy==1.1.82" pandas "pydantic<3" requests beautifulsoup4 markdownify tls-client tzdata python-dotenv
           fi
-          python - <<'PY'
-          import importlib; importlib.import_module("jobspy")
-          print("✅ python-jobspy import OK")
-          PY
 
-      # Manual dry-run (never sends email)
-      - name: Dry-run (manual only)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        continue-on-error: true
-        env:
-          JOBSPY_PROXIES: ${{ secrets.JOBSPY_PROXIES }}
-          JOBSPY_USER_AGENT: ${{ secrets.JOBSPY_USER_AGENT }}
-        run: |
-          python automation_runner.py --profile ruthvej --dry-run --debug --hours 24 || echo "::warning::dry-run had issues"
-
-      # Real send (no guard; runs whenever cron fires)
-      - name: Check email secrets
+      - name: Check required email secrets
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
@@ -63,30 +50,29 @@ jobs:
         run: |
           set -e
           for v in SMTP_SERVER SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM; do
-            [ -n "${!v}" ] || { echo "::error::$v is missing (Repo Settings → Secrets and variables → Actions)"; exit 1; }
+            [ -n "${!v}" ] || { echo "::error::$v is missing"; exit 1; }
           done
-          echo "✅ all email secrets present"
 
-      - name: Run automation (emails)
+      - name: Run automation (profile=ruthvej, board=${{ matrix.board }})
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT:   ${{ secrets.SMTP_PORT }}
           SMTP_USER:   ${{ secrets.SMTP_USER }}
           SMTP_PASS:   ${{ secrets.SMTP_PASS }}
           SMTP_FROM:   ${{ secrets.SMTP_FROM }}
-          JOBSPY_PROXIES: ${{ secrets.JOBSPY_PROXIES }}
           JOBSPY_USER_AGENT: ${{ secrets.JOBSPY_USER_AGENT }}
+          JOBSPY_PROXIES:    ${{ secrets.JOBSPY_PROXIES }}
+          JOB_BOARDS:        ${{ matrix.board }}
         run: |
           set -e
           python automation_runner.py --profile ruthvej --hours 24
-          echo "✅ ruthvej run complete"
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ruthvej-results-${{ github.run_id }}
+          name: ruthvej-${{ matrix.board }}-${{ github.run_id }}
           path: |
             automation_out/*.csv
             debug_runs/**/*.csv
-          if-no-files-found: warn
+          if-no-files-found: ignore
