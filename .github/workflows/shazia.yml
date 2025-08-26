@@ -1,0 +1,78 @@
+name: Shazia — Daily Job Scrape & Email (5 PM ET)
+
+on:
+  schedule:
+    - cron: "0 21 * * *"  # 5 PM ET while on EDT (UTC-4). Update at DST switch.
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [indeed, glassdoor, google]
+      max-parallel: 3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install "python-jobspy==1.1.82" pandas "pydantic<3" requests beautifulsoup4 markdownify tls-client tzdata python-dotenv
+          fi
+
+      - name: Check required email secrets
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
+        run: |
+          set -e
+          for v in SMTP_SERVER SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM; do
+            [ -n "${!v}" ] || { echo "::error::$v is missing"; exit 1; }
+          done
+
+      - name: Run automation (profile=shazia, board=${{ matrix.board }})
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:   ${{ secrets.SMTP_FROM }}
+          JOBSPY_USER_AGENT: ${{ secrets.JOBSPY_USER_AGENT }}
+          JOBSPY_PROXIES:    ${{ secrets.JOBSPY_PROXIES }}
+          JOB_BOARDS:        ${{ matrix.board }}
+        run: |
+          set -e
+          python automation_runner.py --profile shazia --hours 24
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shazia-${{ matrix.board }}-${{ github.run_id }}
+          path: |
+            automation_out/*.csv
+            debug_runs/**/*.csv
+          if-no-files-found: ignore
