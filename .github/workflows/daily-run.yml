@@ -63,7 +63,6 @@ jobs:
           set -e
           python automation_runner.py --profile yoshitha --dry-run --debug --hours 24
           python automation_runner.py --profile shazia   --dry-run --debug --hours 24
-          python automation_runner.py --profile ruthvej  --dry-run --debug --hours 24
 
       # Real sends for scheduled runs (no guard)
       - name: Check required email secrets (scheduled runs)
@@ -95,7 +94,6 @@ jobs:
           set -e
           python automation_runner.py --profile yoshitha --hours 24
           python automation_runner.py --profile shazia   --hours 24
-          python automation_runner.py --profile ruthvej  --hours 24
 
       - name: Summarize outputs
         if: always()
