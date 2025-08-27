@@ -286,73 +286,56 @@ def search_jobs(
                     loc_for_site = _normalize_location_for_site(site, loc_for_all)
                     proxies_to_use = jobspy_proxies or []
 
-                    # ---- Glassdoor special handling (avoid 400s on state/remote) ----
+                    # ---- Glassdoor special handling: DO NOT pass location; use hours + search_term only ----
                     if site == "glassdoor":
-                        gd_locs = _gd_locations_for(loc_for_all)
-                        if not gd_locs:
-                            # Skip invalid GD locations like "Remote" or pure states
-                            continue
+                        for pidx, pconf in enumerate(passes, start=1):
+                            req = {
+                                "site": site,
+                                "title": title_term,
+                                "location_original": loc_for_all,   # kept only for debugging context
+                                "location_normalized": None,        # we are not sending a location to GD
+                                "pass": pidx,
+                                "hours_old": pconf.get("hours_old"),
+                                "easy_apply": False,
+                                "is_remote": None,                  # ignored for GD in this mode
+                                "job_type": None,                   # ignored for GD in this mode
+                                "results_wanted": per_site_requested,
+                                "country_indeed": country_indeed,
+                                "linkedin_fetch_description": False,
+                                "proxies": proxies_to_use or [],
+                                "user_agent": jobspy_user_agent or "",
+                                "verbose": jobspy_verbose,
+                            }
+                            sink.write_json(f"query_{_safe(site)}_{pidx}_{_safe(title_term)}_no_loc.json", req)
 
-                        for gd_loc in gd_locs:
-                            for pidx, pconf in enumerate(passes, start=1):
-                                req = {
-                                    "site": site,
-                                    "title": title_term,
-                                    "location_original": loc_for_all,
-                                    "location_normalized": gd_loc,
-                                    "pass": pidx,
-                                    "hours_old": pconf.get("hours_old"),
-                                    "easy_apply": False,
-                                    "is_remote": pconf.get("is_remote"),
-                                    "job_type": pconf.get("job_type"),
-                                    "results_wanted": per_site_requested,
-                                    "country_indeed": country_indeed,
-                                    "linkedin_fetch_description": False,
-                                    "proxies": proxies_to_use or [],
-                                    "user_agent": jobspy_user_agent or "",
-                                    "verbose": jobspy_verbose,
-                                }
-                                sink.write_json(f"query_{_safe(site)}_{pidx}_{_safe(title_term)}_{_safe(gd_loc)}.json", req)
+                            # No 'location' or 'distance' for GD; just hours + search_term
+                            call_kwargs = dict(
+                                site_name=["glassdoor"],
+                                search_term=title_term,
+                                results_wanted=per_site_requested,
+                                country_indeed=country_indeed,
+                                hours_old=req["hours_old"],
+                                easy_apply=False,
+                                linkedin_fetch_description=False,
+                                proxies=proxies_to_use,
+                                user_agent=jobspy_user_agent,
+                                verbose=jobspy_verbose,
+                            )
 
-                                call_kwargs = dict(
-                                    site_name=[site],
-                                    location=gd_loc,
-                                    results_wanted=per_site_requested,
-                                    country_indeed=country_indeed,
-                                    is_remote=req["is_remote"],
-                                    linkedin_fetch_description=False,
-                                    proxies=proxies_to_use,
-                                    user_agent=jobspy_user_agent,
-                                    verbose=jobspy_verbose,
-                                    easy_apply=False,
-                                    search_term=title_term,
-                                    hours_old=req["hours_old"],
-                                    distance=50,  # helps GD parse around the city
-                                )
-                                if req.get("job_type"):
-                                    call_kwargs["job_type"] = req["job_type"]
+                            df = _scrape_with_retry("glassdoor", call_kwargs, max_retries=4)
 
-                                df = _scrape_with_retry(site, call_kwargs, max_retries=4)
+                            if df is not None and not df.empty:
+                                df = df.copy()
+                                df["SEARCH_TITLE"] = title_term
+                                df["SEARCH_LOCATION"] = loc_for_all
+                                df["NORMALIZED_LOCATION"] = ""  # explicitly blank because we didn't send one
+                                sink.write_df(f"raw_{_safe(site)}_{pidx}_{_safe(title_term)}_no_loc.csv", df)
+                                frames.append(df)
 
-                                # Fallback: try "City ST" (no comma)
-                                if (df is None or df.empty):
-                                    alt_loc = _no_comma_variant(gd_loc)
-                                    if alt_loc:
-                                        alt_kwargs = call_kwargs.copy()
-                                        alt_kwargs["location"] = alt_loc
-                                        df = _scrape_with_retry(site, alt_kwargs, max_retries=2)
+                            time.sleep(max(0.0, float(per_site_delay) + random.uniform(0, 0.6)))
 
-                                if df is not None and not df.empty:
-                                    df = df.copy()
-                                    df["SEARCH_TITLE"] = title_term
-                                    df["SEARCH_LOCATION"] = loc_for_all
-                                    df["NORMALIZED_LOCATION"] = gd_loc
-                                    sink.write_df(f"raw_{_safe(site)}_{pidx}_{_safe(title_term)}_{_safe(gd_loc)}.csv", df)
-                                    frames.append(df)
-
-                                time.sleep(max(0.0, float(per_site_delay) + random.uniform(0, 0.6)))
-
-                        continue  # done with GD for this location
+                        # Done with GD for this location
+                        continue
                     # ----------------- end Glassdoor special case -----------------
 
                     for pidx, pconf in enumerate(passes, start=1):
