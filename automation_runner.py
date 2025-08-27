@@ -19,7 +19,7 @@ Examples:
 from __future__ import annotations
 import os, sys, argparse, traceback
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import pandas as pd
 
 # --- load .env if present ---
@@ -107,8 +107,8 @@ COMMON = dict(
     strict_titles=True,
     linkedin_fetch_description=False,
     results_wanted=100,
-    jobspy_proxies=None,          # can override via --proxies
-    jobspy_user_agent=None,       # can override via --ua
+    jobspy_proxies=None,          # can override via --proxies or env
+    jobspy_user_agent=None,       # can override via --ua or env
     jobspy_verbose=2,
     sequential_mode=True,
     per_site_delay=2.5,
@@ -128,7 +128,7 @@ PROFILES: Dict[str, Dict[str, Any]] = {
             "Data governance analyst",
         ],
         "locations": ["New York", "New Jersey", "Connecticut"],
-        "boards": ["indeed", "glassdoor", "google", "linkedin"],  # exclude zip_recruiter
+        "boards": ["indeed", "glassdoor", "google", "linkedin"],
         "work_mode": "any",
         "max_experience": 6,
     },
@@ -211,21 +211,76 @@ def _expand_for_glassdoor(locs):
             seen.add(x); ret.append(x)
     return ret
 
+# ---------- helpers: final de-dupe + column ordering + email body summary ----------
+
+def _final_dedupe(df: pd.DataFrame) -> pd.DataFrame:
+    """Last-mile de-dupe: prefer unique job_url; else fall back to title+company+location."""
+    if df is None or df.empty:
+        return df
+    deduped = df
+    if "job_url" in deduped.columns:
+        deduped = deduped.drop_duplicates(subset=["job_url"], keep="first")
+    elif "url" in deduped.columns:
+        deduped = deduped.drop_duplicates(subset=["url"], keep="first")
+    else:
+        keys = [c for c in ["title","company","location"] if c in deduped.columns]
+        if keys:
+            deduped = deduped.drop_duplicates(subset=keys, keep="first")
+    return deduped
+
+def _reorder_for_csv(df: pd.DataFrame) -> pd.DataFrame:
+    """Put title, company, job_url, site_name first, then all remaining columns."""
+    if df is None or df.empty:
+        return df if df is not None else pd.DataFrame()
+    # pick first existing from each candidate list
+    def pick_one(cands: list[str]) -> str | None:
+        for c in cands:
+            if c in df.columns:
+                return c
+        return None
+    first_cols = []
+    for group in [["title"], ["company"], ["job_url","url","job_link","direct_job_url"], ["site_name","site","board"]]:
+        col = pick_one(group)
+        if col and col not in first_cols:
+            first_cols.append(col)
+    rest = [c for c in df.columns if c not in first_cols]
+    return df[first_cols + rest]
+
+def _counts_text(df: pd.DataFrame) -> str:
+    """Produce small summary: counts by board and by location for email body."""
+    if df is None or df.empty:
+        return "No results."
+    # board col
+    for bcol in ["site_name","site","board"]:
+        if bcol in df.columns:
+            board_col = bcol
+            break
+    else:
+        board_col = None
+    # location col
+    loc_col = "location" if "location" in df.columns else None
+    parts = []
+    if board_col:
+        vc = df[board_col].fillna("Unknown").value_counts().to_dict()
+        parts.append("By board: " + ", ".join(f"{k}={v}" for k,v in vc.items()))
+    if loc_col:
+        vc = df[loc_col].fillna("Unknown").value_counts().head(8).to_dict()
+        parts.append("Top locations: " + ", ".join(f"{k}={v}" for k,v in vc.items()))
+    return "\n".join(parts) if parts else "No breakdown available."
+
 # --- Run a single profile ---
 def run_profile(profile_key: str, send_email: bool=False, out_dir: str="automation_out", hours_old: int | None = None,
                 proxies: list[str] | None = None, user_agent: str | None = None, debug_enabled: bool = False) -> str:
     prof = PROFILES[profile_key]
-    
-    # ✅ Allow GitHub Actions matrix to force a single board via env JOB_BOARDS
-    #    e.g., JOB_BOARDS=indeed  (from the workflow’s matrix)
+
+    # Allow matrix/env to force one or more boards (comma-separated)
     env_boards = os.getenv("JOB_BOARDS")
     if env_boards:
         prof["boards"] = [b.strip() for b in env_boards.split(",") if b.strip()]
-    
+
     titles = prof["titles"]
-    # Expand "All US states", then append Glassdoor-friendly metros for state inputs
     locations = _expand_for_glassdoor(_flatten_locations(prof["locations"]))
-    boards = [b for b in prof["boards"] if b != "zip_recruiter"]  # enforce skip
+    boards = [b for b in prof["boards"] if b != "zip_recruiter"]
     work_mode = prof.get("work_mode","any")
     max_exp = prof.get("max_experience")
 
@@ -256,18 +311,20 @@ def run_profile(profile_key: str, send_email: bool=False, out_dir: str="automati
         jobspy_verbose=COMMON["jobspy_verbose"],
         sequential_mode=COMMON["sequential_mode"],
         per_site_delay=COMMON["per_site_delay"],
-        # this is the supported debug hook in your service:
         debug_run_name=f"{profile_key}_{stamp}"
     )
 
     # Optional experience filter if available; keep unknown years
-    if filter_by_experience is not None and max_exp is not None:
+    if filter_by_experience is not None and max_exp is not None and df is not None and not df.empty:
         df = filter_by_experience(df, min_years=None, max_years=max_exp, keep_unknown=True)
 
-    # Save CSV
+    # Final de-dupe and CSV column order
     df = df if df is not None else pd.DataFrame()
-    df.to_csv(path, index=False)
+    df = _final_dedupe(df)
+    df = _reorder_for_csv(df)
 
+    # Save CSV
+    df.to_csv(path, index=False)
     print(f"[info] profile={profile_key} rows={len(df)} file={path}")
 
     # Email?
@@ -278,7 +335,7 @@ def run_profile(profile_key: str, send_email: bool=False, out_dir: str="automati
         smtp_pass   = os.getenv("SMTP_PASS", "")
         from_email  = os.getenv("SMTP_FROM", smtp_user or "jobs@example.com")
 
-        # attachment
+        # attachment & summary
         csv_bytes = df.to_csv(index=False).encode("utf-8")
         subject = f"Job scrape — {profile_key} — {stamp} — {hours_val}h — {len(df)} rows"
         body = (
@@ -286,7 +343,8 @@ def run_profile(profile_key: str, send_email: bool=False, out_dir: str="automati
             f"Boards: {', '.join(boards)}\n"
             f"Locations: {', '.join(locations)}\n"
             f"Titles: {', '.join(titles)}\n"
-            f"Rows: {len(df)}\n"
+            f"Rows: {len(df)}\n\n"
+            f"{_counts_text(df)}\n"
         )
         send_email_with_attachment(
             smtp_server=smtp_server,
@@ -316,6 +374,7 @@ def main():
     args = ap.parse_args()
 
     hours_cli = args.hours if hasattr(args, "hours") else None
+
     # Prefer CLI flags; otherwise fall back to env (used by GitHub Actions secrets)
     if args.proxies:
         proxies = [p.strip() for p in args.proxies.split(",") if p.strip()]
@@ -323,7 +382,7 @@ def main():
         proxies = [p.strip() for p in os.getenv("JOBSPY_PROXIES","").split(",") if p.strip()]
     else:
         proxies = None
-    
+
     ua = args.ua or os.getenv("JOBSPY_USER_AGENT")
 
     if not args.profile and not args.all:
