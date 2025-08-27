@@ -7,6 +7,7 @@ import time
 import random
 import logging
 from typing import Iterable, List, Optional, Dict, Any
+from src.utils.postclean import apply_cleaning
 
 import pandas as pd
 
@@ -490,6 +491,9 @@ def search_jobs(
             cleaned = filter_by_titles(cleaned, titles)
     except Exception:
         pass
+
+    # existing normalization/filtering has run → do a final consistent clean:
+    cleaned = apply_cleaning(cleaned)
 
     # Final debug
     try:
