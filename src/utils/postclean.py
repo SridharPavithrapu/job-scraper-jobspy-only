@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import pandas as pd
 from urllib.parse import urlsplit, urlunsplit
+from src.utils.dedupe import dedupe_jobs
 
 # Default rules (can be overridden via function args or ENV later)
 NEGATIVE_KWS = [
@@ -33,8 +34,13 @@ def canonicalize_urls(df: pd.DataFrame) -> pd.DataFrame:
     if not url_col:
         return df
     df = df.copy()
-    df[url_col] = df[url_col].map(_canonicalize_url)
-    return df.drop_duplicates(subset=[url_col], keep="first")
+    df["_url_norm"] = df[url_col].map(_canonicalize_url)
+    nonnull = df["_url_norm"].notna()
+    out = pd.concat(
+        [df[nonnull].drop_duplicates(subset=["_url_norm"], keep="first"), df[~nonnull]],
+        ignore_index=True,
+    )
+    return out.drop(columns=["_url_norm"])
 
 def secondary_dedupe(df: pd.DataFrame) -> pd.DataFrame:
     keys = [k for k in ("title","company","city","state") if k in df.columns]
@@ -67,11 +73,8 @@ def apply_cleaning(
         return df
     out = df.copy()
 
-    # 1) Canonicalize & de-dupe by URL
-    out = canonicalize_urls(out)
-
-    # 2) De-dupe by (title, company, city/state)
-    out = secondary_dedupe(out)
+   # 1–2) Robust de-dupe (URL-based via _url_norm + composite keys), preserves full job_url
+    out = dedupe_jobs(out)
 
     # 3) Filter unrelated titles
     if not keep_unrelated:

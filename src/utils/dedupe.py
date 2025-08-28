@@ -77,6 +77,7 @@ def dedupe_jobs(df: pd.DataFrame) -> pd.DataFrame:
     if url_col:
         out["_url_norm"] = out[url_col].apply(_normalize_url)
         nonnull = out["_url_norm"].notna()
+        # dedupe only by _url_norm, but KEEP the full original job_url
         out = pd.concat(
             [
                 out[nonnull].drop_duplicates(subset=["_url_norm"], keep="first"),
