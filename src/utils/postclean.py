@@ -11,6 +11,10 @@ NEGATIVE_KWS = [
     "devops","cloud","architect","implementation","customer success","support","help desk",
     "sales","marketing","nurse","physician","driver","teacher","secretary","receptionist",
     "custodian","warehouse","mechanic","electrician",
+
+    # New exclusions
+    "data entry","data entry clerk","data entry clerks",
+    "data scientist","data scientists",
 ]
 ALLOW_KWS = [
     "data","analyst","analytics","bi","business intelligence","insight","reporting","visualization","sql",
