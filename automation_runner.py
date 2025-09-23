@@ -122,10 +122,19 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "to": ["shaziaiqra1@gmail.com"],
         "titles": [
             "Data analyst",
-            "Business analyst",
             "Business intelligence engineer",
             "Power BI developer",
             "Data governance analyst",
+        ],
+        "locations": ["New York", "New Jersey", "Connecticut"],
+        "boards": ["indeed", "glassdoor", "google", "linkedin"],
+        "work_mode": "any",
+        "max_experience": 6,
+    },
+    "shazia_1": {
+        "to": ["shaziaiqra1@gmail.com"],
+        "titles": [
+            "Business analyst",
         ],
         "locations": ["New York", "New Jersey", "Connecticut"],
         "boards": ["indeed", "glassdoor", "google", "linkedin"],
